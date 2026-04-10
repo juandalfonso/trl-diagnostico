@@ -166,9 +166,9 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);line-
 </head>
 <body>
 <header class="header" role="banner">
-  <h1>&#128300; Diagnostico <span>TRL</span> — Madurez Tecnologica</h1>
+  <h1>&#128300; Diagnostico <span>TRL</span> &mdash; Madurez Tecnologica</h1>
   <p>Herramienta interactiva para evaluar el nivel de madurez tecnologica a partir de un Disclosure</p>
-  <span class="badge">100% LOCAL — SIN SERVIDOR — SUS ARCHIVOS NO SALEN DEL EQUIPO</span>
+  <span class="badge">100% LOCAL &mdash; SIN SERVIDOR &mdash; SUS ARCHIVOS NO SALEN DEL EQUIPO</span>
 </header>
 <nav class="main-nav" role="navigation" aria-label="Pasos del proceso">
   <div class="main-nav-inner">
@@ -565,113 +565,203 @@ function log(msg,type){
   el.scrollTop=el.scrollHeight;
 }
 
+/* =============================================================
+   parseAndFill — lógica de extracción mejorada
+   Correcciones aplicadas:
+   1. TÍTULO: captura el campo "Título de la creación intelectual"
+      con el patrón numerado del formato Javeriana ("1. Título...")
+      y variantes sin número. Tolera OCR sin tildes.
+   2. INSTITUCIÓN: extrae ÚNICAMENTE del bloque del Integrante 1
+      (primer "Integrante 1" en el texto), no del primer match global.
+   3. FACULTAD/DEPENDENCIA: extrae el campo "Dependencia" o "Facultad"
+      del bloque del Integrante 1, limpiando tokens como "Facultad de"
+      que el OCR puede fusionar con el valor anterior.
+   4. CORREO: tolerante a OCR que omite "@" y fusiona usuario+dominio
+      (ej. "vguzmanjaveriana.edu.co" → "vguzman@javeriana.edu.co").
+   5. SECTOR: detección enriquecida con vocabulario de
+      alimentos/biotecnología/química y ciencias de la vida.
+   ============================================================= */
 function parseAndFill(text){
-  const t=text;
-  const data={};
+  const t = text;
+  const data = {};
 
-  // TITULO: busca el campo especifico del formulario de disclosure
-  let mTit = t.match(/[Nn]ombre\s+de\s+la\s+tecnolog[\u00edi]a\s*[\/\\]?\s*(?:invenci[\u00f3o]n)?[^:\n]*[:\n]+\s*([^\n]{10,200})/);
-  if(!mTit) mTit = t.match(/[Tt][\u00edi]tulo\s+de\s+la\s+(?:tecnolog[\u00edi]a|creaci[\u00f3o]n|invenci[\u00f3o]n)[^:\n]*[:\n]+\s*([^\n]{10,200})/);
-  if(!mTit) mTit = t.match(/[Tt][\u00edi]tulo[^:\n]*[:\n]+\s*([^\n]{10,200})/);
+  // ── BLOQUE DEL INTEGRANTE 1 ──────────────────────────────────────
+  // Aísla el bloque entre "Integrante 1" y el siguiente "Integrante"
+  // para que institución, facultad y correo se lean solo de ahí.
+  let bloque1 = '';
+  const mBloque = t.match(/[Ii]ntegrante\s+1[\s\S]{0,2000}?(?=[Ii]ntegrante\s+[23456789])/);
+  if(mBloque) bloque1 = mBloque[0];
+  else bloque1 = t.substring(0, Math.min(t.length, 2000)); // fallback: primeros 2000 chars
+
+  // ── 1. TÍTULO ────────────────────────────────────────────────────
+  // Patrón 1: "1. Título de la creación intelectual" seguido del valor
+  // en la misma línea o en la siguiente (formato Javeriana numerado).
+  // Tolera: tildes reales, OCR sin tilde, variantes "creacion" / "creación"
+  let mTit = t.match(/1\.\s*[Tt][íi]tulo\s+de\s+la\s+creaci[oó]n\s+intelectual\s*[\r\n]+\s*([^\r\n]{10,300})/i);
+  // Patrón 2: mismo encabezado pero con el valor en la misma línea tras ":"
+  if(!mTit) mTit = t.match(/[Tt][íi]tulo\s+de\s+la\s+creaci[oó]n\s+intelectual\s*[:\-–]\s*([^\r\n]{10,300})/i);
+  // Patrón 3: "Nombre de la tecnología / invención"
+  if(!mTit) mTit = t.match(/[Nn]ombre\s+de\s+la\s+tecnolog[íi]a\s*[\/\\]?\s*(?:invenci[oó]n)?\s*[:\-–\r\n]+\s*([^\r\n]{10,200})/i);
+  // Patrón 4: "Título de la tecnología / creación / invención"
+  if(!mTit) mTit = t.match(/[Tt][íi]tulo\s+de\s+la\s+(?:tecnolog[íi]a|creaci[oó]n|invenci[oó]n)\s*[:\-–\r\n]+\s*([^\r\n]{10,200})/i);
+  // Patrón 5: campo genérico "Título:" (último recurso)
+  if(!mTit) mTit = t.match(/^[Tt][íi]tulo\s*[:\-–]\s*([^\r\n]{10,200})/im);
   if(mTit) data.titulo = mTit[1].trim().replace(/\s+/g,' ');
-  else { const first=t.match(/^([A-Z\u00c1\u00c9\u00cd\u00d3\u00da\u00d1][^\n]{20,150})$/m); if(first) data.titulo=first[1].trim(); }
 
-  // INVENTORES: extrae nombres numerados del bloque de integrantes
-  const nombresMatch = [...t.matchAll(/(?:^|\n)\s*\d+[\.)\s]+(?:[Nn]ombre[:\s]+)?([A-Z\u00c1\u00c9\u00cd\u00d3\u00da\u00d1][a-z\u00e1\u00e9\u00ed\u00f3\u00fa\u00f1]+(?:\s+[A-Z\u00c1\u00c9\u00cd\u00d3\u00da\u00d1][a-z\u00e1\u00e9\u00ed\u00f3\u00fa\u00f1]+){1,5})/gm)];
-  if(nombresMatch.length > 0){
-    data.inventores = nombresMatch.map(m => m[1].trim()).join(', ');
+  // ── 2. INVENTORES ────────────────────────────────────────────────
+  // Busca "Nombre completo" etiquetado, uno por integrante.
+  const nombresRaw = [...t.matchAll(/[Nn]ombre\s+completo\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+){1,5})/g)];
+  if(nombresRaw.length > 0){
+    data.inventores = nombresRaw.map(m => m[1].trim()).join(', ');
   } else {
-    const mInv = t.match(/(?:[Ii]nventor(?:es)?|[Aa]utor(?:es)?)[\s:]+([^\n]{5,200})/);
-    if(mInv) data.inventores = mInv[1].trim();
+    // Fallback: líneas numeradas tipo "1. Nombre Apellido"
+    const nombresNum = [...t.matchAll(/(?:^|\n)\s*\d+[\.)]\s*([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+){1,5})/gm)];
+    if(nombresNum.length > 0) data.inventores = nombresNum.map(m => m[1].trim()).join(', ');
+    else {
+      const mInv = t.match(/(?:[Ii]nventor(?:es)?|[Aa]utor(?:es)?)\s*[:\-–]+\s*([^\r\n]{5,200})/);
+      if(mInv) data.inventores = mInv[1].trim();
+    }
   }
 
-  // INSTITUCION: primer match de 'Institucion:' corresponde al primer integrante
-  const instMatches = [...t.matchAll(/[Ii]nstituci[\u00f3o]n[:\s]+([^\n]{5,120})/g)];
-  if(instMatches.length > 0){
-    const val = instMatches[0][1].trim().replace(/\s+/g,' ');
+  // ── 3. INSTITUCIÓN (desde bloque Integrante 1) ───────────────────
+  // Busca "Institución" seguida del valor dentro del bloque del primer integrante.
+  const mInst1 = bloque1.match(/[Ii]nstituci[oó]n\s*[:\-–]?\s*([^\r\n]{5,120})/);
+  if(mInst1){
+    const val = mInst1[1].trim().replace(/\s+/g,' ');
     if(val.length > 3 && !/^[-_\.]+$/.test(val)) data.institucion = val;
   }
+  // Fallback: buscar nombre de universidad en el texto completo
   if(!data.institucion){
-    const univMatch = t.match(/(?:Pontificia\s+)?[Uu]niversidad\s+[A-Z\u00c1\u00c9\u00cd\u00d3\u00da\u00d1][a-z\u00e1\u00e9\u00ed\u00f3\u00fa\u00f1]+(?:\s+[A-Z\u00c1\u00c9\u00cd\u00d3\u00da\u00d1][a-z\u00e1\u00e9\u00ed\u00f3\u00fa\u00f1]+)*/);
+    const univMatch = t.match(/(?:Pontificia\s+)?Universidad\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)*/);
     if(univMatch) data.institucion = univMatch[0].trim().replace(/\s+/g,' ');
   }
 
-  // FACULTAD / DEPENDENCIA: primer match del documento
-  const depMatches = [...t.matchAll(/(?:[Ff]acultad|[Dd]ependencia|[Dd]epartamento)[:\s]+([^\n]{5,100})/g)];
-  if(depMatches.length > 0){
-    const val = depMatches[0][1].trim().replace(/\s+/g,' ');
+  // ── 4. FACULTAD / DEPENDENCIA (desde bloque Integrante 1) ────────
+  // El OCR del formato Javeriana puede fusionar "Dependencia Facultad"
+  // en una sola línea. Se extraen ambas etiquetas y se toma la primera.
+  const mDep1 = bloque1.match(/(?:[Dd]ependencia|[Ff]acultad)\s*[:\-–]?\s*([^\r\n]{5,150})/);
+  if(mDep1){
+    let val = mDep1[1].trim().replace(/\s+/g,' ');
+    // Limpiar tokens OCR duplicados como "Facultad de Ciencias Facultad de Ciencias"
+    val = val.replace(/(.{10,})\s+\1/i,'$1').trim();
     if(val.length > 3) data.facultad = val;
   }
 
-  // CORREO: primera direccion de email
-  const mCorreo = t.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/);
-  if(mCorreo) data.correo = mCorreo[0].trim();
+  // ── 5. CORREO (desde bloque Integrante 1) ────────────────────────
+  // Patrón estándar con "@"
+  let mCorreo = bloque1.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/);
+  // Patrón OCR sin "@": usuario inmediatamente seguido de dominio conocido
+  // Ej: "vguzmanjaveriana.edu.co" → usuario termina antes de la inst.
+  if(!mCorreo){
+    mCorreo = bloque1.match(/([a-zA-Z0-9._\-]{3,30})(javeriana\.edu\.co|unal\.edu\.co|uniandes\.edu\.co|udea\.edu\.co|uis\.edu\.co|utp\.edu\.co|uninorte\.edu\.co|univalle\.edu\.co|[a-zA-Z0-9\-]+\.edu\.co)/i);
+    if(mCorreo) data.correo = mCorreo[1] + '@' + mCorreo[2];
+  } else {
+    data.correo = mCorreo[0].trim();
+  }
+  // Si aún no hay correo, buscar en todo el texto
+  if(!data.correo){
+    const mAny = t.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/);
+    if(mAny) data.correo = mAny[0].trim();
+  }
 
-  // TRL DECLARADO
-  const mTRL = t.match(/TRL[\/\s]*SRL[^0-9]*([1-9])|TRL[^0-9]*([1-9])|nivel\s+(?:TRL|de\s+madurez)[^0-9]*([1-9])/i);
+  // ── 6. TRL DECLARADO ─────────────────────────────────────────────
+  const mTRL = t.match(/TRL[\\/\s]*SRL[^0-9]*([1-9])|TRL[^0-9]*([1-9])|nivel\s+(?:TRL|de\s+madurez)[^0-9]*([1-9])/i);
   if(mTRL) data.trl = mTRL[1]||mTRL[2]||mTRL[3];
 
-  // FECHA
-  const mFecha = t.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})/);
-  if(mFecha) data.fecha = mFecha[3]+'-'+String(mFecha[2]).padStart(2,'0')+'-'+String(mFecha[1]).padStart(2,'0');
+  // ── 7. FECHA ─────────────────────────────────────────────────────
+  // Prioriza el campo "Fecha de Diligenciamiento" del encabezado
+  const mFechaEnc = t.match(/[Ff]echa\s+de\s+[Dd]iligenciamiento[^0-9]*(\d{1,2})[.\-\/](\d{1,2})[.\-\/](\d{4})/);
+  if(mFechaEnc){
+    data.fecha = mFechaEnc[3]+'-'+String(mFechaEnc[2]).padStart(2,'0')+'-'+String(mFechaEnc[1]).padStart(2,'0');
+  } else {
+    const mFecha = t.match(/(\d{1,2})[\/.\\-](\d{1,2})[\/.\\-](\d{4})/);
+    if(mFecha) data.fecha = mFecha[3]+'-'+String(mFecha[2]).padStart(2,'0')+'-'+String(mFecha[1]).padStart(2,'0');
+  }
 
-  // SECTOR: lee campo explicito del formulario primero
-  const mSectorCampo = t.match(/[Ss]ector\s+tecnol[\u00f3o]gico[^:\n]*[:\n]+\s*([^\n]{3,60})/);
+  // ── 8. SECTOR TECNOLÓGICO ─────────────────────────────────────────
+  // Prioridad 1: leer campo explícito "Sector tecnológico:" si existe
+  const mSectorCampo = t.match(/[Ss]ector\s+tecnol[oó]gico\s*[:\-–]+\s*([^\r\n]{3,80})/);
   if(mSectorCampo){
     const sv = mSectorCampo[1].toLowerCase();
-    if(/software|sistemas|inform[\u00e1a]t|web|app|m[\u00f3o]vil/.test(sv)) data.sector='software';
-    else if(/hardware|electr[\u00f3o]n|iot|sensor|dispositivo/.test(sv)) data.sector='hardware';
-    else if(/biotech|biolog|microorg|gen[\u00e9e]t|farmac|vacuna/.test(sv)) data.sector='biotech';
-    else if(/qu[\u00edi]mi|material|s[\u00edi]ntesis|compuesto|pol[\u00edi]mero/.test(sv)) data.sector='quimica';
+    if(/software|sistemas|inform[aá]t|web|app|m[oó]vil/.test(sv)) data.sector='software';
+    else if(/hardware|electr[oó]n|iot|sensor|dispositivo/.test(sv)) data.sector='hardware';
+    else if(/biotech|biol[oó]g|microorg|gen[eé]t|farmac|vacuna|alimento|l[aá]cteo|nutri/.test(sv)) data.sector='biotech';
+    else if(/qu[ií]mi|material|s[ií]ntesis|compuesto|pol[ií]mero|emulsi[oó]n/.test(sv)) data.sector='quimica';
   }
+  // Prioridad 2: detección heurística por vocabulario del cuerpo del documento
   if(!data.sector){
-    if(/\b(?:software|aplicaci[\u00f3o]n|app|sistema\s+de\s+informaci[\u00f3o]n|base\s+de\s+datos|algoritmo)\b/i.test(t)) data.sector='software';
-    else if(/\b(?:hardware|circuito|sensor|dispositivo|IoT|embebido|electr[\u00f3o]nico)\b/i.test(t)) data.sector='hardware';
-    else if(/\b(?:biotecnolog[\u00edi]a|biolog[\u00edi]a|microorganismo|gen[\u00e9e]tico|c[\u00e9e]lula|prote[\u00edi]na|vacuna|farmac[\u00e9e]utico)\b/i.test(t)) data.sector='biotech';
-    else if(/\b(?:qu[\u00edi]mica|material|s[\u00edi]ntesis|compuesto|pol[\u00edi]mero|catalizador|reacci[\u00f3o]n)\b/i.test(t)) data.sector='quimica';
+    const tl = t.toLowerCase();
+    // Biotecnología / alimentos funcionales / ciencias de la vida
+    if(/\b(?:biotecnolog[ií]a|biolog[ií]a|microorganismo|gen[eé]tico|c[eé]lula|prote[ií]na|vacuna|farmac[eé]utico|alimento\s+funcional|producto\s+l[aá]cteo|extracto|encapsulaci[oó]n|bioactivo|glucosinolato|emulsi[oó]n|capuchina|tropaeolum|queso|nutrici[oó]n|in\s+vivo|in\s+vitro)\b/.test(tl))
+      data.sector='biotech';
+    // Química / materiales
+    else if(/\b(?:qu[ií]mica|material|s[ií]ntesis|compuesto|pol[ií]mero|catalizador|reacci[oó]n|nanotecnolog[ií]a|recubrimiento)\b/.test(tl))
+      data.sector='quimica';
+    // Software
+    else if(/\b(?:software|aplicaci[oó]n|app|sistema\s+de\s+informaci[oó]n|base\s+de\s+datos|algoritmo|inteligencia\s+artificial|machine\s+learning)\b/.test(tl))
+      data.sector='software';
+    // Hardware / IoT
+    else if(/\b(?:hardware|circuito|sensor|dispositivo|iot|embebido|electr[oó]nico|robot)\b/.test(tl))
+      data.sector='hardware';
   }
 
-  // PROTOTIPO
-  if(/prototipo\s+(?:funcional|validado|piloto)/i.test(t)) data.prototipo='piloto';
-  else if(/prototipo\s+(?:de\s+)?laboratorio/i.test(t)) data.prototipo='laboratorio';
+  // ── 9. PROTOTIPO ─────────────────────────────────────────────────
+  if(/prototipo\s+(?:final|listo\s+para\s+uso|en\s+producci[oó]n)/i.test(t)) data.prototipo='precomercial';
+  else if(/prototipo\s+validado/i.test(t)) data.prototipo='piloto';
+  else if(/prototipo\s+(?:funcional|piloto)/i.test(t)) data.prototipo='piloto';
+  else if(/prototipo\s+(?:de\s+)?laboratorio|prototipo\s+preliminar/i.test(t)) data.prototipo='laboratorio';
+  else if(/sin\s+prototipo|no\s+se\s+tiene\s+prototipo|no\s+aplica/i.test(t)) data.prototipo='ninguno';
   else if(/prototipo/i.test(t)) data.prototipo='laboratorio';
 
-  // TIPO: lee campo explicito del formulario primero
-  const mTipoCampo = t.match(/[Tt]ipo\s+de\s+creaci[\u00f3o]n[^:\n]*[:\n]+\s*([^\n]{5,80})/);
+  // ── 10. TIPO DE CREACIÓN ─────────────────────────────────────────
+  // Lee el campo "Tipo de creación" explícito primero
+  const mTipoCampo = t.match(/[Tt]ipo\s+de\s+creaci[oó]n\s*[:\-–]+\s*([^\r\n]{5,100})/);
   if(mTipoCampo){
     const tv = mTipoCampo[1].toLowerCase();
-    if(/software|aplicaci[\u00f3o]n/.test(tv)) data.tipo='software';
-    else if(/invenci[\u00f3o]n|modelo\s+de\s+utilidad|patente/.test(tv)) data.tipo='invencion';
-    else if(/producto\s+tecnol[\u00f3o]gico/.test(tv)) data.tipo='producto';
-    else if(/proceso|metodolog[\u00edi]a/.test(tv)) data.tipo='proceso';
+    if(/software|aplicaci[oó]n/.test(tv)) data.tipo='software';
+    else if(/invenci[oó]n|modelo\s+de\s+utilidad|patente/.test(tv)) data.tipo='invencion';
+    else if(/producto\s+tecnol[oó]gico/.test(tv)) data.tipo='producto';
+    else if(/proceso|metodolog[ií]a/.test(tv)) data.tipo='proceso';
     else if(/tesis|trabajo\s+de\s+grado/.test(tv)) data.tipo='tesis';
+    else if(/variedad\s+vegetal/.test(tv)) data.tipo='variedad';
   }
+  // Heurística por marcado X en el formulario (ej. "Metodología X")
   if(!data.tipo){
-    if(/\b(?:software|aplicaci[\u00f3o]n|sistema)\b/i.test(t)&&!/hardware/i.test(t)) data.tipo='software';
-    else if(/\b(?:tesis|trabajo\s+de\s+grado|proyecto\s+de\s+grado)\b/i.test(t)) data.tipo='tesis';
-    else if(/\b(?:producto\s+tecnol[\u00f3o]gico|dispositivo|equipo)\b/i.test(t)) data.tipo='producto';
-    else if(/\b(?:invenci[\u00f3o]n|patente|modelo\s+de\s+utilidad)\b/i.test(t)) data.tipo='invencion';
+    if(/[Mm]etodolog[ií]a\s*[Xx✓✗]/i.test(t)||/\bX\b.*[Mm]etodolog[ií]a/i.test(t)) data.tipo='proceso';
+    else if(/[Pp]roducto\s+tecnol[oó]gico\s*[Xx✓]/i.test(t)) data.tipo='producto';
+    else if(/[Tt]esis|[Tt]rabajo\s+de\s+grado/i.test(t)) data.tipo='tesis';
+    else if(/[Ii]nvenci[oó]n|[Pp]atente/i.test(t)) data.tipo='invencion';
+    else if(/\b(?:software|aplicaci[oó]n|sistema)\b/i.test(t)&&!/hardware/i.test(t)) data.tipo='software';
   }
 
-  // DESCRIPCION
-  const mDesc = t.match(/(?:[Dd]escripci[\u00f3o]n|[Rr]esumen)[^:\n]*[:\n]+\s*([^\n]{40,400})/);
+  // ── 11. DESCRIPCIÓN ──────────────────────────────────────────────
+  const mDesc = t.match(/(?:5\.\s*)?[Dd]escrib[ae]\s+brevemente\s+la\s+creaci[oó]n\s+intelectual[\s\S]{0,200}?[Dd]escripci[oó]n\s*([^\r\n]{40,500})/i);
   if(mDesc) data.descripcion = mDesc[1].trim();
+  if(!data.descripcion){
+    const mDesc2 = t.match(/[Dd]escripci[oó]n\s*[:\-–]+\s*([^\r\n]{40,400})/);
+    if(mDesc2) data.descripcion = mDesc2[1].trim();
+  }
 
-  // PROBLEMA
-  const mProb = t.match(/(?:[Pp]roblema|[Nn]ecesidad|[Pp]roblem[\u00e1a]tica)[^:\n]*[:\n]+\s*([^\n]{20,300})/);
+  // ── 12. PROBLEMA ─────────────────────────────────────────────────
+  const mProb = t.match(/(?:3\.\s*)?[Dd]escriba\s+el\s+problema[^\r\n]*[\r\n]+\s*([^\r\n]{30,400})/i);
   if(mProb) data.problema = mProb[1].trim();
+  if(!data.problema){
+    const mProb2 = t.match(/[Pp]roblema\s*[:\-–]+\s*([^\r\n]{20,300})/);
+    if(mProb2) data.problema = mProb2[1].trim();
+  }
 
-  // SOPORTES
+  // ── 13. SOPORTES ─────────────────────────────────────────────────
   const sops=[];
-  if(/publicaci[\u00f3o]n|art[\u00edi]culo|paper/i.test(t)) sops.push('Publicacion academica');
-  if(/prototipo/i.test(t)) sops.push('Prototipo fisico o funcional');
-  if(/software|c[\u00f3o]digo/i.test(t)) sops.push('Software / Codigo fuente');
-  if(/informe|reporte|documento\s+t[\u00e9e]cnico/i.test(t)) sops.push('Informes tecnicos');
-  if(/imagen|fotograf[\u00edi]a|foto/i.test(t)) sops.push('Fotografias / Imagenes');
+  if(/publicaci[oó]n|art[ií]culo|paper|simposio|congreso/i.test(t)) sops.push('Publicacion academica / Simposio');
+  if(/prototipo/i.test(t)&&!/sin\s+prototipo|no\s+se\s+tiene/i.test(t)) sops.push('Prototipo funcional');
+  if(/software|c[oó]digo/i.test(t)) sops.push('Software / Codigo fuente');
+  if(/informe|reporte|documento\s+t[eé]cnico|POE|procedimiento/i.test(t)) sops.push('Informes / POEs');
+  if(/imagen|fotograf[ií]a|foto/i.test(t)) sops.push('Fotografias / Imagenes');
   if(/video/i.test(t)) sops.push('Videos demostrativos');
   if(/patent/i.test(t)) sops.push('Solicitud de patente');
-  if(/muestras?|especimen|muestra\s+f[\u00edi]sica/i.test(t)) sops.push('Muestras fisicas');
+  if(/muestra|especimen|muestra\s+f[ií]sica/i.test(t)) sops.push('Muestras fisicas');
   if(/certificad|registro/i.test(t)) sops.push('Certificados / Registros');
+  if(/art[ií]culo\s+cient[ií]fico\s+(?:en\s+)?(?:versi[oó]n|borrador|preliminar)/i.test(t)) sops.push('Borrador articulo cientifico');
   if(sops.length) data.soportes=sops.join(', ');
 
   extractedData=data;
@@ -704,11 +794,11 @@ function fillForm(data){
 }
 
 function showExtractionPreview(data){
-  const keys={titulo:'Titulo',inventores:'Inventores',institucion:'Institucion',facultad:'Facultad',trl:'TRL declarado',sector:'Sector',prototipo:'Estado prototipo',correo:'Correo contacto',soportes:'Evidencias'};
+  const keys={titulo:'Titulo',inventores:'Inventores',institucion:'Institucion',facultad:'Facultad/Dependencia',trl:'TRL declarado',sector:'Sector',prototipo:'Estado prototipo',correo:'Correo contacto (Integrante 1)',soportes:'Evidencias'};
   const filled=Object.entries(keys).filter(([k])=>data[k]);
   if(!filled.length)return;
   const cont=document.getElementById('extractedFields');
-  cont.innerHTML=filled.map(([k,label])=>`<div class="extracted-field${k==='soportes'?' full':''}"><div class="ef-label">${label}</div><div class="ef-value">${data[k]}</div></div>`).join('');
+  cont.innerHTML=filled.map(([k,label])=>`<div class="extracted-field${k==='soportes'||k==='titulo'?' full':''}"><div class="ef-label">${label}</div><div class="ef-value">${data[k]}</div></div>`).join('');
   document.getElementById('extractPreview').classList.add('show');
 }
 
@@ -716,13 +806,16 @@ function loadDemo(){
   const demoText=`Pontificia Universidad Javeriana
 Facultad de Ingenieria
 Sistema IoT para evaluacion de calidad vial mediante telefonia movil
-Autores: Juan Perez, Maria Gomez, Carlos Rodriguez
-Fecha: 15/03/2024
+Nombre completo Juan Perez
+Nombre completo Maria Gomez
+Nombre completo Carlos Rodriguez
+Institucion Pontificia Universidad Javeriana
+Correo electronico jperez@javeriana.edu.co
+Fecha de Diligenciamiento y envio 15.03.2024
 TRL/SRL: 5
-Descripcion: Sistema que utiliza los acelerometros de telefonos inteligentes para capturar vibraciones del vehiculo durante la conduccion, transmitir los datos via HTTP a un servidor, procesarlos con algoritmos de clasificacion y generar mapas de calidad vial georeferenciados.
-Problema: Las autoridades viales carecen de herramientas accesibles y de bajo costo para monitorear el estado de la infraestructura vial de manera continua y a escala.
-Soportes: prototipo funcional, software, codigo fuente, informe tecnico, publicacion academica, imagenes del sistema, video demostrativo.
-Estado: Prototipo validado en condiciones reales de conduccion urbana. Pruebas realizadas en 5 rutas de la ciudad con 3 usuarios distintos al equipo de desarrollo.`;
+Descripcion La creacion esta dada por un sistema que utiliza los acelerometros de telefonos inteligentes para capturar vibraciones del vehiculo, transmitir datos via HTTP a un servidor, procesarlos con algoritmos y generar mapas de calidad vial georeferenciados.
+Problema Las autoridades viales carecen de herramientas accesibles y de bajo costo para monitorear el estado de la infraestructura vial de manera continua.
+Soportes: prototipo funcional, software, codigo fuente, informe tecnico, publicacion academica, imagenes del sistema, video demostrativo.`;
   document.getElementById('fileName').textContent='disclosure_demo_iot.pdf';
   document.getElementById('fileSize').textContent='Modo demostracion';
   document.getElementById('fileStatus').classList.add('show');
@@ -890,7 +983,6 @@ function calcDiagnostico(){
 
 function updateActionBar(){
   const bar=document.getElementById('actionBar');
-  const btnNext=document.getElementById('btnNext');
   if(currentStep===1){bar.innerHTML=`<div class="action-bar-inner"><button class="btn btn-secondary" onclick="resetAll()">&#8635; Reiniciar</button><button class="btn btn-primary" id="btnNext" onclick="goStep(2)">Continuar &#8594;</button></div>`;}
   else if(currentStep===2){bar.innerHTML=`<div class="action-bar-inner"><button class="btn btn-secondary" onclick="goStep(1)">&#8592; Atras</button><button class="btn btn-primary" onclick="goStep(3)">Ir a Matriz &#8594;</button></div>`;}
   else if(currentStep===3){bar.innerHTML=`<div class="action-bar-inner"><button class="btn btn-secondary" onclick="goStep(2)">&#8592; Atras</button><button class="btn btn-gold" onclick="goStep(4)">Calcular Diagnostico &#9654;</button></div>`;}

@@ -743,11 +743,44 @@ function parseAndFill(text){
   }
 
   // ── 12. PROBLEMA ─────────────────────────────────────────────────
-  const mProb = t.match(/(?:3\.\s*)?[Dd]escriba\s+el\s+problema[^\r\n]*[\r\n]+\s*([^\r\n]{30,400})/i);
-  if(mProb) data.problema = mProb[1].trim();
+  // Estrategia principal: extraer desde el bloque "Descripción de la creación intelectual"
+  // (texto entre ese encabezado y la siguiente sección numerada).
+  // Se toman las primeras 2-3 oraciones o el párrafo completo si tiene < 600 caracteres.
+  (function(){
+    const mBloqDesc = t.match(
+      /[Dd]escripci[oó]n\s+de\s+la\s+creaci[oó]n\s+intelectual[^\r\n]*[\r\n]([\s\S]{20,2000}?)(?=\n\s*\d+[\.\ ]|\n\s*[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑA-Za-záéíóúñ ]{5,}\s*\n|$)/i
+    );
+    if(mBloqDesc){
+      const bloque = mBloqDesc[1].trim();
+      if(bloque.length < 600){
+        data.problema = bloque.replace(/\s+/g,' ').trim();
+      } else {
+        // Extraer primeras 2-3 oraciones (separadas por punto seguido de espacio/salto)
+        const oraciones = bloque.match(/[^.!?]+[.!?]+/g) || [];
+        const primeras = oraciones.slice(0,3).join(' ').trim();
+        data.problema = primeras.length >= 30 ? primeras.replace(/\s+/g,' ') : bloque.substring(0,500).trim();
+      }
+    }
+  })();
+  // Patrón clásico: "Describa el problema ..." seguido del texto en la línea siguiente
+  if(!data.problema){
+    const mProb = t.match(/(?:3\.\s*)?[Dd]escriba\s+el\s+problema[^\r\n]*[\r\n]+\s*([^\r\n]{30,400})/i);
+    if(mProb) data.problema = mProb[1].trim();
+  }
+  // Fallback 1: "Problema: ..." en la misma línea
   if(!data.problema){
     const mProb2 = t.match(/[Pp]roblema\s*[:\-–]+\s*([^\r\n]{20,300})/);
     if(mProb2) data.problema = mProb2[1].trim();
+  }
+  // Fallback 2: palabras clave problema / necesidad / dificultad / limitación
+  if(!data.problema){
+    const mFallback = t.match(/(?:necesidad|dificultad|limitaci[oó]n)\s*[:\-–]+\s*([^\r\n]{20,400})/i);
+    if(mFallback) data.problema = mFallback[1].trim();
+  }
+  if(!data.problema){
+    // Buscar la oración más larga que contenga alguna de las palabras clave
+    const oracionesKw = (t.match(/[^.!?\r\n]{20,400}(?:problema|necesidad|dificultad|limitaci[oó]n)[^.!?\r\n]{0,300}[.!?]?/gi)||[]);
+    if(oracionesKw.length) data.problema = oracionesKw[0].replace(/\s+/g,' ').trim();
   }
 
   // ── 13. SOPORTES ─────────────────────────────────────────────────

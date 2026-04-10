@@ -609,8 +609,17 @@ function parseAndFill(text){
   if(mTit) data.titulo = mTit[1].trim().replace(/\s+/g,' ');
 
   // ── 2. INVENTORES ────────────────────────────────────────────────
-  // Busca "Nombre completo" etiquetado, uno por integrante.
-  const nombresRaw = [...t.matchAll(/[Nn]ombre\s+completo\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+){1,5})/g)];
+  // El formato Javeriana tiene dos variantes para "Nombre completo":
+  //   a) En la MISMA línea:  "Nombre completo: Valentina Guzmán Pérez"
+  //   b) En la línea SIGUIENTE (PDF extraído con salto de línea):
+  //      "Nombre completo:\nValentina Guzmán Pérez"
+  // Integrante 1 (Investigador principal) siempre aparece primero en el PDF;
+  // los demás integrantes se agregan separados por coma.
+  const nombresRaw = [
+    ...t.matchAll(
+      /[Nn]ombre\s+completo\s*[:\-–]?\s*(?:\r?\n\s*)?([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+){1,5})/g
+    )
+  ];
   if(nombresRaw.length > 0){
     data.inventores = nombresRaw.map(m => m[1].trim()).join(', ');
   } else {
@@ -735,50 +744,70 @@ function parseAndFill(text){
   }
 
   // ── 11. DESCRIPCIÓN ──────────────────────────────────────────────
-  const mDesc = t.match(/(?:5\.\s*)?[Dd]escrib[ae]\s+brevemente\s+la\s+creaci[oó]n\s+intelectual[\s\S]{0,200}?[Dd]escripci[oó]n\s*([^\r\n]{40,500})/i);
+  // Patrón 1: "5. Describa brevemente..." → tabla → "Descripción: [texto]" (misma línea)
+  const mDesc = t.match(/(?:5\.\s*)?[Dd]escrib[ae]\s+brevemente\s+la\s+creaci[oó]n\s+intelectual[\s\S]{0,400}?[Dd]escripci[oó]n\s*[:\-–]?\s*(?:\r?\n\s*)?([^\r\n]{40,600})/i);
   if(mDesc) data.descripcion = mDesc[1].trim();
+  // Patrón 2: "Descripción:\nTexto..." (salto de línea entre etiqueta y valor)
   if(!data.descripcion){
-    const mDesc2 = t.match(/[Dd]escripci[oó]n\s*[:\-–]+\s*([^\r\n]{40,400})/);
+    const mDescNL = t.match(/[Dd]escripci[oó]n\s*[:\-–]+\s*\r?\n\s*([^\r\n]{40,600})/);
+    if(mDescNL) data.descripcion = mDescNL[1].trim();
+  }
+  // Patrón 3: "Descripción: texto" en la misma línea, descartando encabezados de sección
+  if(!data.descripcion){
+    const mDesc2 = t.match(/[Dd]escripci[oó]n\s*[:\-–]+\s*(?!de\s+la\s+creaci[oó]n)([^\r\n]{40,500})/);
     if(mDesc2) data.descripcion = mDesc2[1].trim();
   }
 
   // ── 12. PROBLEMA ─────────────────────────────────────────────────
-  // Estrategia principal: extraer desde el bloque "Descripción de la creación intelectual"
-  // (texto entre ese encabezado y la siguiente sección numerada).
-  // Se toman las primeras 2-3 oraciones o el párrafo completo si tiene < 600 caracteres.
+  // El formato Javeriana agrupa bajo "DESCRIPCION DE LA CREACIÓN INTELECTUAL":
+  //   Punto 3 → problema/necesidad/oportunidad (varios párrafos)
+  //   Punto 4 → situación actual sin la creación
+  //   Punto 5 → descripción breve
+  // Se extrae el contenido del punto 3 completo (hasta el punto 4).
+  // Si supera 800 chars se toman las últimas 2-3 oraciones (resumen concreto).
   (function(){
-    const mBloqDesc = t.match(
-      /[Dd]escripci[oó]n\s+de\s+la\s+creaci[oó]n\s+intelectual[^\r\n]*[\r\n]([\s\S]{20,2000}?)(?=\n\s*\d+[\.\ ]|\n\s*[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑA-Za-záéíóúñ ]{5,}\s*\n|$)/i
+    // Estrategia A: buscar bloque entre punto 3 y punto 4 dentro de la sección DESCRIPCION
+    const mSec = t.match(
+      /DESCRIPCION\s+DE\s+LA\s+CREACI[ÓO]N\s+INTELECTUAL[\s\S]{0,300}?3\.\s*[Dd]escriba\s+el\s+problema[^\r\n]*[\r\n]([\s\S]{30,3000}?)(?=\n\s*4\.|\n\s*5\.)/i
     );
-    if(mBloqDesc){
-      const bloque = mBloqDesc[1].trim();
-      if(bloque.length < 600){
-        data.problema = bloque.replace(/\s+/g,' ').trim();
+    if(mSec){
+      let bloque = mSec[1].replace(/\s+/g,' ').trim();
+      if(bloque.length <= 800){
+        data.problema = bloque;
       } else {
-        // Extraer primeras 2-3 oraciones (separadas por punto seguido de espacio/salto)
-        const oraciones = bloque.match(/[^.!?]+[.!?]+/g) || [];
-        const primeras = oraciones.slice(0,3).join(' ').trim();
-        data.problema = primeras.length >= 30 ? primeras.replace(/\s+/g,' ') : bloque.substring(0,500).trim();
+        // Texto largo: tomar las últimas 2-3 oraciones que resumen el problema concreto
+        const ors = bloque.match(/[^.!?]{15,}[.!?]/g) || [];
+        const ultimas = ors.slice(-3).join(' ').trim();
+        data.problema = ultimas.length >= 30 ? ultimas : bloque.substring(0, 700).trim();
       }
+      return;
     }
+    // Estrategia B: punto 3 sin el encabezado de sección (texto normalizado OCR)
+    const mPto3 = t.match(
+      /3\.\s*[Dd]escriba\s+el\s+problema[\s\S]{0,100}?[\r\n]([\s\S]{30,2500}?)(?=\n\s*4\.|\n\s*5\.)/i
+    );
+    if(mPto3){
+      let bloque = mPto3[1].replace(/\s+/g,' ').trim();
+      data.problema = bloque.length <= 800 ? bloque : bloque.substring(0, 700).trim();
+      return;
+    }
+    // Estrategia C: encabezado "Describa el problema/necesidad" sin número
+    const mPtoC = t.match(
+      /[Dd]escriba\s+el\s+problema[^\r\n]*[\r\n]+\s*([^\r\n]{30,500})/i
+    );
+    if(mPtoC){ data.problema = mPtoC[1].trim(); return; }
   })();
-  // Patrón clásico: "Describa el problema ..." seguido del texto en la línea siguiente
-  if(!data.problema){
-    const mProb = t.match(/(?:3\.\s*)?[Dd]escriba\s+el\s+problema[^\r\n]*[\r\n]+\s*([^\r\n]{30,400})/i);
-    if(mProb) data.problema = mProb[1].trim();
-  }
   // Fallback 1: "Problema: ..." en la misma línea
   if(!data.problema){
     const mProb2 = t.match(/[Pp]roblema\s*[:\-–]+\s*([^\r\n]{20,300})/);
     if(mProb2) data.problema = mProb2[1].trim();
   }
-  // Fallback 2: palabras clave problema / necesidad / dificultad / limitación
+  // Fallback 2: palabras clave necesidad / dificultad / limitación
   if(!data.problema){
     const mFallback = t.match(/(?:necesidad|dificultad|limitaci[oó]n)\s*[:\-–]+\s*([^\r\n]{20,400})/i);
     if(mFallback) data.problema = mFallback[1].trim();
   }
   if(!data.problema){
-    // Buscar la oración más larga que contenga alguna de las palabras clave
     const oracionesKw = (t.match(/[^.!?\r\n]{20,400}(?:problema|necesidad|dificultad|limitaci[oó]n)[^.!?\r\n]{0,300}[.!?]?/gi)||[]);
     if(oracionesKw.length) data.problema = oracionesKw[0].replace(/\s+/g,' ').trim();
   }
